@@ -1,0 +1,532 @@
+// Code your design here
+// 16-bit MIPS Parts
+// 
+// * Data Memory and IO:  This is the data memory, and some IO hardware
+// * 8x16 register file:  eight 16-bit registers
+// * 16-bit ALU
+// * 2:1 16-bit Multiplexer
+// * 4:1 16-bit Multiplexer
+
+//----------------------------------------------------------
+// Data Memory and IO
+// The data memory is 128 16-bit words.  The addresses are
+// 0, 2, 4, ...., 254.  Note that the address of words are 
+// divisible by 2 (memory is byte addressable and big endian).
+// This module also has some hardware for IO.  In particular,
+// There are three ports:
+//
+//     Address	Type		What's it connected to
+//     0xfffa	Output	Seven segment display
+//     0xfff0	Input		Switches sw1 and sw0
+//
+// Output port 0xfffa is connected to an 7-bit register. So
+// when storing a word "w" to the port, the value
+// w[6:0] gets stored in the port's register.  The output
+// of this register is connected to a seven segment display.
+// The display has pin names
+//
+//    -a-
+//   f   b
+//    -g-
+//   e   c
+//    -d-
+//
+// and (a,b,c,d,e,f,g) = (w[6],w[5],....w[0]).  For example,
+// to display the number "5", then w = (1,0,1,1,0,1,1).
+//
+// The input port 0xfff0 is connected to switches sw1 and sw0.  
+//
+// After reading a word "w" from the port, then
+//    w[1] = sw1, w[0] = sw0.
+//
+module DMemory_IO(
+     output logic [15:0] rdata,  // read data
+     output logic [6:0] io_display, // IO port connected to 7 segment display
+     input logic clock,  // clock
+     input logic [15:0] addr,   // address
+     input logic [15:0] wdata,  // write data
+     input logic write,  // write enable
+     input logic read,   // read enable
+     input logic io_sw0, // IO port connected to sliding switch 0
+     input logic io_sw1  // IO port connected to sliding switch 1
+     );
+		
+
+reg [15:0] memcell[0:127]; // 128 half-words for memory
+
+// This is basically a multiplexer, that chooses to output the
+// memory or IO.  
+always_comb
+	begin
+	if (read == 0) rdata = 0;
+	else // read = 1
+		begin
+		if (addr >= 0 && addr < 256) 
+               rdata = memcell[addr[7:1]]; 
+		else if (addr == 16'hfff0) 		
+               rdata = {14'd0,io_sw1,io_sw0};
+		else rdata = 0; // default 
+		end
+	end
+
+// IO port 0xfffa that is connected to the seven segment display.
+always_ff @(posedge clock)
+	if (write == 1 && addr == 16'hfffa) 
+         io_display <= wdata[6:0];
+
+// Note that if waddr[15:0] = 0 
+//   then 0 <= waddr < 256 and one of the
+// 256 memory cells is being accessed
+always_ff @(posedge clock)
+     if (write == 1 && addr>= 0 && addr < 256) 
+          memcell[addr[7:1]] <= wdata;
+
+endmodule
+
+//----------------------------------------------------------
+// 8x16 Register File
+module RegFile(
+     output logic [15:0] rdata1,  // read data output 1
+     output logic [15:0] rdata2,  // read data output 2
+     input logic clock,		
+     input logic [15:0] wdata,   // write data input
+     input logic [2:0] waddr,   // write address
+     input logic [2:0] raddr1,  // read address 1
+     input logic [2:0] raddr2,  // read address 2
+     input logic write    // write enable
+     );			
+
+reg [15:0] regcell[0:7];		// Eight registers
+
+// Writing to a register
+always_ff @(posedge clock) 
+     if (write==1) regcell[waddr]<=wdata;
+
+// Reading from a register
+always_comb
+     begin
+     if (raddr1 == 7) 	rdata1 = 0;
+     else rdata1 = regcell[raddr1];
+     end
+
+// Reading from a register
+always_comb
+     begin
+     if (raddr2 == 7) 	rdata2 = 0;
+     else rdata2 = regcell[raddr2];
+     end
+
+endmodule
+
+//----------------------------------------------------------
+// ALU
+// 
+// Function table
+// select	function
+// 0		add
+// 1		subtract
+// 2		pass through 'indata1' to the output 'result'
+// 3		or
+// 4		and
+//
+module ALU(
+     output logic [15:0] result, // 16-bit output from the ALU
+     output logic zero_result, // equals 1 if the result is 0, and 0 otherwise
+     input logic [15:0] indata0,     // data input
+     input logic [15:0] indata1,     // data input
+     input logic [2:0] select       // 3-bit select
+     );		
+
+always_comb
+	case(select)
+	0: result = indata0 + indata1;
+	1: result = indata0 - indata1;
+	2: result = indata0;
+	3: result = indata0 | indata1;
+	4: result = indata0 & indata1;
+	default: result = 0;
+	endcase
+
+always_comb // This is basically a NOR operation
+	if (result == 0) 	zero_result = 1;
+	else 			  	zero_result = 0;
+
+endmodule
+
+//----------------------------------------------------------
+// 2:1 Multiplexer
+
+module MUX2(
+     output logic [15:0] result,   // Output of multiplexer
+     input logic [15:0] indata0,  // Input 0
+     input logic [15:0] indata1,  // Input 1
+     input logic select    // 1-bit select
+     );	
+
+always_comb
+	case(select)
+	0: result = indata0;
+	1: result = indata1;
+	endcase
+
+endmodule
+
+//----------------------------------------------------------
+// 4:1 Multiplexer
+module MUX4(
+     output logic [15:0] result, // 16 bit output
+     input logic [15:0] indata0, // Input 0
+     input logic [15:0] indata1, // Input 1
+     input logic [15:0] indata2, // Input 2
+     input logic [15:0] indata3, // Input 3
+     input logic [1:0] select    // 2-bit select input
+     );	
+
+always_comb
+	case(select)
+	0: result = indata0;
+	1: result = indata1;
+	2: result = indata2;
+	3: result = indata3;
+	endcase
+
+endmodule
+
+// EE 361
+// LEGLite 
+// 
+// The control module for LEGLite
+//   The control will input the opcode value (3 bits)
+//   then determine what the control signals should be
+//   in the datapath
+//  
+//---------------------------------------------------------------
+module Control(
+     output logic reg2loc,
+     output logic uncondbranch,
+     output logic branch,
+     output logic memread,
+     output logic memtoreg,
+     output logic [2:0] alu_select,
+     output logic memwrite,
+     output logic alusrc,
+     output logic regwrite,
+     input logic [3:0] opcode
+     );
+
+
+always_comb
+	case(opcode)
+	0:	// ADD
+		begin
+		reg2loc = 0;		//Pick 1st reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 0; 	//Have ALU do an ADD
+		memwrite = 0; 		//Disable memory
+		alusrc = 0; 		//Read from register
+		regwrite = 1;		//Write result to register
+		end
+	1:	// SUB
+		begin
+		reg2loc = 0;		//Pick 1st reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 1; 	//Have ALU do an SUB
+		memwrite = 0; 		//Disable memory
+		alusrc = 0; 		//Read from register
+		regwrite = 1;		//Write result to register
+		end
+	4:	// Branch
+		begin
+		reg2loc = 0;		//Pick 2nd reg field(Don't care for Branch)
+		uncondbranch = 1;	//Enable unconditional Branch
+		branch = 1;   		//Enable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 0; 	//Have ALU do an ADD
+		memwrite = 0; 		//Enable memory
+		alusrc = 0; 		//Read from instruction
+		regwrite = 0;		//Disable write to register
+		end
+	5:	// Load
+		begin
+		reg2loc = 0;		//Pick 2nd reg field(don't care for LDUR)
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 1;  		//Disable memory
+		memtoreg = 1;		//Have Memory write to register
+		alu_select = 0; 	//Have ALU do an ADD
+		memwrite = 0; 		//Disable memory
+		alusrc = 1; 		//Read from instruction
+		regwrite = 1;		//Write result to register
+		end
+	6:	// Store
+		begin
+		reg2loc = 1;		//Pick 2nd reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 1;		//Have ALU write to reg
+		alu_select = 0; 	//Have ALU do an ADD
+		memwrite = 1; 		//Enable memory
+		alusrc = 1; 		//Read from instruction
+		regwrite = 0;		//Disable write to register
+		end
+	7:	// CBZ
+		begin
+		reg2loc = 1;		//Pick 2nd reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 1;   		//Enable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 2; 	//Have ALU Cmp value to zero
+		memwrite = 0; 		//Enable memory
+		alusrc = 0; 		//Read from instruction
+		regwrite = 0;		//Disable write to register
+		end
+	8:	// ADDI
+		begin
+		reg2loc = 0;		//Pick 2nd reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 0; 	//Have ALU ADD
+		memwrite = 0; 		//Enable memory
+		alusrc = 1; 		//Read from instruction
+		regwrite = 1;		//Disable write to register
+		end
+	9:	// ANDI
+		begin
+		reg2loc = 0;		//Pick 2nd reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 4; 	//Have ALU ADD
+		memwrite = 0; 		//Enable memory
+		alusrc = 1; 		//Read from instruction
+		regwrite = 1;		//Disable write to register
+		end
+	10:	// SUBI
+		begin
+		reg2loc = 0;		//Pick 2nd reg field
+		uncondbranch = 0;	//Disable unconditional Branch
+		branch = 0;   		//Disable Branch
+		memread = 0;  		//Disable memory
+		memtoreg = 0;		//Have ALU write to reg
+		alu_select = 1; 	//Have ALU ADD
+		memwrite = 0; 		//Enable memory
+		alusrc = 1; 		//Read from instruction
+		regwrite = 1;		//Disable write to register
+		end
+	default:
+		begin
+		reg2loc = 0;
+		uncondbranch = 0;
+		branch = 0;   
+		memread = 0;   
+		memtoreg = 0;  
+		alu_select = 0; 
+		memwrite = 0; 
+		alusrc = 0;    
+		regwrite = 0;
+		end
+	endcase
+
+endmodule
+
+// EE 361
+// LEGLite
+// 
+// * PC and PC Control:  Program Counter and
+//         the PC control logic
+//--------------------------------------------------------------
+// PC and PC Control
+module PCLogic(
+     output logic [15:0] pc,  // current pc value
+     input logic clock, // clock input
+     input logic [15:0] signext,	// from sign extend circuit
+     input logic uncondbranch,
+     input logic branch,	
+     input logic alu_zero,	
+     input logic reset	
+     );
+												    
+// Program counter pc is updated
+//   * if reset = 0 then pc = 0
+//   * otherwise pc = pc +2
+// What's missing is how pc is updated when a branch occurs
+
+always_ff @(posedge clock)
+	begin
+	if (reset==1) 
+		pc <= 0;
+    else if(branch == 1 && alu_zero == 1) 
+		pc <= pc + (signext << 1) ;
+   	else if( uncondbranch == 1) 
+		pc <= pc + (signext << 1) ;
+	else 
+		pc <= pc+2; // default
+	end
+		
+		
+endmodule
+
+// EE 361
+// LEGLite Single Cycle
+// 
+// Obviously, it's incomplete.  Just the ports are defined.
+//
+
+module LEGLiteSingle(
+	iaddr,		// Program memory address.  This is the program counter
+	daddr,		// Data memory address
+	dwrite,		// Data memory write enable
+	dread,		// Data memory read enable
+	dwdata,		// Data memory write output
+	alu_out,	// Output of alu for debugging purposes
+	clock,
+	idata,		// Program memory output, which is the current instruction
+	ddata,		// Data memory output
+	reset,
+	probe
+	);
+
+output [15:0] iaddr; 	//PC
+output [15:0] daddr;	//ALU Output
+output dwrite;			//Mem Writ EN
+output dread;			//Mem Read EN
+output [15:0] dwdata;	//Write data or read data 2 from reg
+output [15:0] alu_out;	//ALU OUT
+input clock;			//CLK
+input [15:0] idata; 	//Instructions 
+input [15:0] ddata;		//Read data from memory
+input reset;
+output [15:0] probe;
+	
+//Create wires for control modules	
+wire reg2loc;
+wire uncondbranch;
+wire branch;
+wire memtoreg;
+wire [2:0] alu_selec;
+wire alusrc;
+wire regwrite;
+
+//Create wires for register
+wire [15:0] rdata1;
+wire [15:0] rdata2;
+wire [15:0] readReg1;
+wire [15:0] readReg2;
+
+//create wires for ALU
+wire [15:0] ALU_input2;
+wire  mainALU_z_out;
+assign alu_out = daddr;
+
+//signextension
+wire [15:0] signextension;
+assign signextension = {{10{idata[11]}}, idata[11:6]};
+
+//debugging
+assign probe = signextension;
+
+Control legv8_control(
+	reg2loc, 
+	uncondbranch, 
+	branch, 
+	dread, 
+	memtoreg, 
+	alu_selec, 
+	dwrite, 
+	alusrc , 
+	regwrite, 
+	{idata [15:12]}
+	);
+
+RegFile legv8_register(
+	rdata1, 
+	rdata2, 
+	clock, 
+	dwdata, 
+	{idata [2:0]}, 
+	{idata [5:3]}, //raddress2
+	readReg2[2:0], 		//raddress1
+	regwrite
+	);
+
+
+MUX2 reg2loc_mux(
+	readReg2, 
+	{{13'b0},idata [11:9]}, 
+	{{13'b0},idata [2:0]}, 
+	reg2loc
+	);
+
+MUX2 alusrc_mux(
+	ALU_input2, 
+	rdata2, 
+	signextension, 
+	alusrc
+	);
+	
+MUX2 memtoreg_mux(
+	dwdata,
+	daddr,
+  	ddata,
+	memtoreg
+	);
+	
+ALU legv8_mainALU(
+	daddr,
+	mainALU_z_out,
+	rdata1,
+	ALU_input2,
+	alu_selec
+	);
+
+	
+PCLogic legv8_pclogic(
+	iaddr,
+	clock,
+	signextension,
+	uncondbranch,
+	branch,
+	mainALU_z_out,
+	reset
+	);
+
+endmodule
+// Program or Instuction Memory -- IM1.V
+// Multiplies 3 by 5 and the product is in X4
+//
+// L0:    X2 = 3,   this serves as a counter
+//        X4 = 0,   this stores the partial product
+// L1:    if X2 == 0 then goto L0
+//        X4 = X4 + 5
+//        X2 = X2 - 1
+//        goto L1
+//
+module IM(
+     output logic [15:0] idata,
+     input logic [15:0] iaddr
+     );
+
+always_comb
+  case(iaddr[3:1])
+     0: idata={4'd8, 6'd3, 3'd7, 3'd2};      //L0: ADDI  X2,XZR,#3
+     1: idata={4'd0, 3'd7,3'd0,3'd7,3'd4};   //    ADD   X4,XZR,XZR
+     2: idata={4'd7, 6'b111110,3'd2,3'd0};   //L1: CBZ   X2,L0
+     3: idata={4'd8, 6'd5, 3'd4,3'd4};       //    ADDI  X4,X4,#5
+     4: idata={4'd8, 6'b111111,3'd2,3'd2};   //    ADDI  X2,X2,#-1
+     5: idata={4'd7, 6'b111101,3'd7,3'd0};   //    CBZ   XZR,L1
+     default: idata=0;
+  endcase
+
+endmodule
